@@ -225,6 +225,11 @@ def run_test(args):
     return False
 
 
+def run_capture_stdout(args, cwd=None, env=None):
+  result = subprocess.run(args, cwd=cwd, env=env, check=True, capture_output=True)
+  return result.stdout.decode("utf-8").strip()
+
+
 # Host OS & Architecture Utilities
 # --------------------------------
 
@@ -506,6 +511,21 @@ def apt_add_test_ubuntu_toolchain():
   run(["add-apt-repository", "-y", apt_ubuntu_test_toolchain_ppa], sudo=True)
 
 
+def list_dpkg_packages():
+  output = []
+  packages = run_capture_stdout(["dpkg", "-l"])
+  for package in packages.split("\n"):
+    parts = package.strip().split()
+    if len(parts) >= 2:
+      status = parts[0]
+      package_name = parts[1]
+      if ":" in package_name:
+        package_name = package_name[0:package_name.find(":")]
+      if status == "ii":
+        output.append(package_name)
+  return output
+
+
 # Prepare Step
 # ------------
 
@@ -599,7 +619,7 @@ def prepare_step(args):
   # -------------
 
   elif host_os == "Linux":
-    packages = []
+    packages = ["build-essential"]
     compiler_package = None
 
     if is_compiler_gcc(compiler):
@@ -636,8 +656,14 @@ def prepare_step(args):
         raise ValueError("analyze-build can only be used with clang compiler, not {}".format(compiler))
       packages.append(compiler.replace("clang", "clang-tools"))
 
-    if packages:
-      log("Need to install {} packages".format(packages))
+    installed_packages = list_dpkg_packages()
+    packages_to_install = []
+    for package in packages:
+      if package not in installed_packages:
+        packages_to_install.append(package)
+
+    if packages_to_install:
+      log("Need to install {} packages".format(packages_to_install))
 
       if compiler.startswith("clang-") and not compiler_exists and match_compiler_versions(compiler, apt_llvm_versions):
         apt_add_llvm_toolchain_repository(compiler_version(compiler))
@@ -645,7 +671,7 @@ def prepare_step(args):
         apt_add_test_ubuntu_toolchain()
 
       run(["apt-get", "update", "-qq"], sudo=True, retry_patterns=apt_retry_patterns)
-      run(["apt-get", "install", "-qq"] + packages, sudo=True, retry_patterns=apt_retry_patterns)
+      run(["apt-get", "install", "-qq"] + packages_to_install, sudo=True, retry_patterns=apt_retry_patterns)
 
   else:
     raise ValueError("Unknown platform: {}".format(host_os))
